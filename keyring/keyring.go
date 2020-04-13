@@ -77,6 +77,7 @@ type Keyring interface {
 
 // ListOpts ...
 type ListOpts struct {
+	// Types to filter by.
 	Types []string
 }
 
@@ -86,10 +87,11 @@ type Store interface {
 	Set(service string, id string, data []byte, typ string) error
 	Delete(service string, id string) (bool, error)
 
-	IDs(service string, prefix string, showHidden bool, showReserved bool) ([]string, error)
-	List(service string, key SecretKey, opts *ListOpts) ([]*Item, error)
+	IDs(service string, prefix string, showHidden bool, showReserved bool, encoder ItemEncoder) ([]string, error)
+	List(service string, key SecretKey, opts *ListOpts, encoder ItemEncoder) ([]*Item, error)
+
 	Exists(service string, id string) (bool, error)
-	Reset(service string) error
+	Reset(service string, encoder ItemEncoder) error
 }
 
 // System returns system keyring store.
@@ -133,7 +135,7 @@ func UnlockWithPassword(kr Keyring, password string) error {
 	return nil
 }
 
-func getItem(st Store, service string, id string, key SecretKey) (*Item, error) {
+func getItem(st Store, service string, id string, key SecretKey, encoder ItemEncoder) (*Item, error) {
 	if key == nil {
 		return nil, ErrLocked
 	}
@@ -144,14 +146,21 @@ func getItem(st Store, service string, id string, key SecretKey) (*Item, error) 
 	if b == nil {
 		return nil, nil
 	}
-	return decodeItem(b, key)
+	if b == nil {
+		return nil, nil
+	}
+	item, err := encoder.Decode(b, key)
+	if err != nil {
+		return nil, err
+	}
+	return item, nil
 }
 
 const maxID = 254
 const maxType = 32
 const maxData = 2048
 
-func setItem(st Store, service string, item *Item, key SecretKey) error {
+func setItem(st Store, service string, item *Item, key SecretKey, encoder ItemEncoder) error {
 	if key == nil {
 		return ErrLocked
 	}
@@ -165,7 +174,7 @@ func setItem(st Store, service string, item *Item, key SecretKey) error {
 		return ErrItemValueTooLarge
 	}
 
-	data, err := item.Marshal(key)
+	data, err := encoder.Encode(item, key)
 	if err != nil {
 		return err
 	}
@@ -176,30 +185,19 @@ func setItem(st Store, service string, item *Item, key SecretKey) error {
 	return st.Set(service, item.ID, []byte(data), item.Type)
 }
 
-func decodeItem(b []byte, key SecretKey) (*Item, error) {
-	if b == nil {
-		return nil, nil
-	}
-	item, err := DecodeItem(b, key)
-	if err != nil {
-		return nil, err
-	}
-	return item, nil
-}
-
-func unlock(st Store, service string, auth Auth) (SecretKey, error) {
+func unlock(st Store, service string, auth Auth, encoder ItemEncoder) (SecretKey, error) {
 	if auth == nil {
 		return nil, errors.Errorf("no auth specified")
 	}
 
 	key := auth.Key()
 
-	item, err := getItem(st, service, reserved("auth"), key)
+	item, err := getItem(st, service, reserved("auth"), key, encoder)
 	if err != nil {
 		return nil, err
 	}
 	if item == nil {
-		err := setItem(st, service, NewItem(reserved("auth"), key[:], "", time.Now()), key)
+		err := setItem(st, service, NewItem(reserved("auth"), key[:], "", time.Now()), key, encoder)
 		if err != nil {
 			return nil, err
 		}
@@ -226,6 +224,14 @@ func salt(st Store, service string) ([]byte, error) {
 	return salt, nil
 }
 
+// Opts are options for keyring.
+type Opts struct {
+	// Store is the backing keyring store.
+	Store Store
+	// ItemEncoder, if specified overrides how to encode/decode keyring items.
+	ItemEncoder ItemEncoder
+}
+
 // NewKeyring creates a new Keyring with backing Store.
 //
 // Use keyring.System() for the default system Store.
@@ -233,28 +239,40 @@ func salt(st Store, service string) ([]byte, error) {
 //
 // On other environments, you can use a filesystem backed Store by specifying
 // keyring.FS(dir).
-func NewKeyring(service string, st Store) (Keyring, error) {
+func NewKeyring(service string, opts *Opts) (Keyring, error) {
 	if service == "" {
 		return nil, errors.Errorf("no service specified")
 	}
 	logger.Debugf("Keyring (%s)", service)
-	kr, err := newKeyring(st, service)
+	kr, err := newKeyring(service, opts)
 	if err != nil {
 		return nil, err
 	}
 	return kr, nil
 }
 
-func newKeyring(st Store, service string) (*keyring, error) {
-	return &keyring{st: st, service: service}, nil
+func newKeyring(service string, opts *Opts) (*keyring, error) {
+	if opts == nil {
+		opts = &Opts{}
+	}
+	if opts.Store == nil {
+		opts.Store = System()
+	}
+	if opts.ItemEncoder == nil {
+		opts.ItemEncoder = DefaultItemEncoder()
+	}
+	return &keyring{
+		service: service,
+		opts:    opts,
+	}, nil
 }
 
 var _ Keyring = &keyring{}
 
 type keyring struct {
-	st      Store
 	service string
 	key     SecretKey
+	opts    *Opts
 }
 
 const reservedPrefix = "#"
@@ -269,7 +287,7 @@ func (k *keyring) Get(id string) (*Item, error) {
 	if strings.HasPrefix(id, reservedPrefix) {
 		return nil, errors.Errorf("keyring id prefix reserved %s", id)
 	}
-	return getItem(k.st, k.service, id, k.key)
+	return getItem(k.opts.Store, k.service, id, k.key, k.opts.ItemEncoder)
 }
 
 func (k *keyring) Create(item *Item) error {
@@ -279,7 +297,7 @@ func (k *keyring) Create(item *Item) error {
 	if strings.HasPrefix(item.ID, reservedPrefix) {
 		return errors.Errorf("keyring id prefix reserved %s", item.ID)
 	}
-	existing, err := getItem(k.st, k.service, item.ID, k.key)
+	existing, err := getItem(k.opts.Store, k.service, item.ID, k.key, k.opts.ItemEncoder)
 	if err != nil {
 		return err
 	}
@@ -287,7 +305,7 @@ func (k *keyring) Create(item *Item) error {
 		return ErrItemAlreadyExists
 	}
 
-	return setItem(k.st, k.service, item, k.key)
+	return setItem(k.opts.Store, k.service, item, k.key, k.opts.ItemEncoder)
 }
 
 func (k *keyring) Update(id string, b []byte) error {
@@ -298,7 +316,7 @@ func (k *keyring) Update(id string, b []byte) error {
 		return errors.Errorf("keyring id prefix reserved %s", id)
 	}
 
-	item, err := getItem(k.st, k.service, id, k.key)
+	item, err := getItem(k.opts.Store, k.service, id, k.key, k.opts.ItemEncoder)
 	if err != nil {
 		return err
 	}
@@ -307,18 +325,18 @@ func (k *keyring) Update(id string, b []byte) error {
 	}
 	item.Data = b
 
-	return setItem(k.st, k.service, item, k.key)
+	return setItem(k.opts.Store, k.service, item, k.key, k.opts.ItemEncoder)
 }
 
 func (k *keyring) Delete(id string) (bool, error) {
-	return k.st.Delete(k.service, id)
+	return k.opts.Store.Delete(k.service, id)
 }
 
 func (k *keyring) List(opts *ListOpts) ([]*Item, error) {
-	return k.st.List(k.service, k.key, opts)
+	return k.opts.Store.List(k.service, k.key, opts, k.opts.ItemEncoder)
 }
 
-func listDefault(st Store, service string, key SecretKey, opts *ListOpts) ([]*Item, error) {
+func listDefault(st Store, service string, key SecretKey, opts *ListOpts, encoder ItemEncoder) ([]*Item, error) {
 	if opts == nil {
 		opts = &ListOpts{}
 	}
@@ -326,7 +344,7 @@ func listDefault(st Store, service string, key SecretKey, opts *ListOpts) ([]*It
 		return nil, ErrLocked
 	}
 
-	ids, err := st.IDs(service, "", false, false)
+	ids, err := st.IDs(service, "", false, false, encoder)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +354,7 @@ func listDefault(st Store, service string, key SecretKey, opts *ListOpts) ([]*It
 		if err != nil {
 			return nil, err
 		}
-		item, err := DecodeItem(b, key)
+		item, err := encoder.Decode(b, key)
 		if err != nil {
 			return nil, err
 		}
@@ -352,15 +370,15 @@ func listDefault(st Store, service string, key SecretKey, opts *ListOpts) ([]*It
 }
 
 func (k *keyring) IDs(prefix string) ([]string, error) {
-	return k.st.IDs(k.service, prefix, false, false)
+	return k.opts.Store.IDs(k.service, prefix, false, false, k.opts.ItemEncoder)
 }
 
 func (k *keyring) Exists(id string) (bool, error) {
-	return k.st.Exists(k.service, id)
+	return k.opts.Store.Exists(k.service, id)
 }
 
 func (k *keyring) Unlock(auth Auth) error {
-	key, err := unlock(k.st, k.service, auth)
+	key, err := unlock(k.opts.Store, k.service, auth, k.opts.ItemEncoder)
 	if err != nil {
 		return err
 	}
@@ -374,11 +392,11 @@ func (k *keyring) Lock() error {
 }
 
 func (k *keyring) Salt() ([]byte, error) {
-	return salt(k.st, k.service)
+	return salt(k.opts.Store, k.service)
 }
 
 func (k *keyring) Authed() (bool, error) {
-	return k.st.Exists(k.service, reserved("auth"))
+	return k.opts.Store.Exists(k.service, reserved("auth"))
 }
 
 // func (k *keyring) ResetAuth() error {
@@ -392,14 +410,14 @@ func (k *keyring) Authed() (bool, error) {
 // }
 
 func (k *keyring) Reset() error {
-	if err := k.st.Reset(k.service); err != nil {
+	if err := k.opts.Store.Reset(k.service, k.opts.ItemEncoder); err != nil {
 		return err
 	}
 	return k.Lock()
 }
 
-func resetDefault(st Store, service string) error {
-	ids, err := st.IDs(service, "", true, true)
+func resetDefault(st Store, service string, encoder ItemEncoder) error {
+	ids, err := st.IDs(service, "", true, true, encoder)
 	if err != nil {
 		return err
 	}

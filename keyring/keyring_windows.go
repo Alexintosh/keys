@@ -73,6 +73,10 @@ func (k sys) List(service string, key SecretKey, opts *ListOpts) ([]*Item, error
 	if opts == nil {
 		opts = &ListOpts{}
 	}
+	decodeFn := opts.DecodeFn
+	if decodeFn == nil {
+		decodeFn = DecodeItem
+	}
 	if key == nil {
 		return nil, ErrLocked
 	}
@@ -87,7 +91,7 @@ func (k sys) List(service string, key SecretKey, opts *ListOpts) ([]*Item, error
 			if strings.HasPrefix(id, hiddenPrefix) || strings.HasPrefix(id, reservedPrefix) {
 				continue
 			}
-			item, err := DecodeItem(cred.CredentialBlob, key)
+			item, err := decodeFn(cred.CredentialBlob, key)
 			if err != nil {
 				return nil, err
 			}

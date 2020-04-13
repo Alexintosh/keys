@@ -82,7 +82,7 @@ func (k sys) Exists(service string, id string) (bool, error) {
 	return true, nil
 }
 
-func (k sys) List(service string, key SecretKey, opts *ListOpts) ([]*Item, error) {
+func (k sys) List(service string, key SecretKey, opts *ListOpts, encoder ItemEncoder) ([]*Item, error) {
 	if opts == nil {
 		opts = &ListOpts{}
 	}
@@ -111,7 +111,7 @@ func (k sys) List(service string, key SecretKey, opts *ListOpts) ([]*Item, error
 		if strings.HasPrefix(r.Account, hiddenPrefix) || strings.HasPrefix(r.Account, reservedPrefix) {
 			continue
 		}
-		item, err := getItem(k, service, r.Account, key)
+		item, err := getItem(k, service, r.Account, key, encoder)
 		if err != nil {
 			return nil, err
 		}
@@ -131,11 +131,11 @@ func (k sys) List(service string, key SecretKey, opts *ListOpts) ([]*Item, error
 	return items, nil
 }
 
-func (k sys) Reset(service string) error {
-	return resetDefault(k, service)
+func (k sys) Reset(service string, encoder ItemEncoder) error {
+	return resetDefault(k, service, encoder)
 }
 
-func (k sys) IDs(service string, prefix string, showHidden bool, showReserved bool) ([]string, error) {
+func (k sys) IDs(service string, prefix string, showHidden bool, showReserved bool, encoder ItemEncoder) ([]string, error) {
 	query := keychain.NewItem()
 	query.SetSecClass(keychain.SecClassGenericPassword)
 	query.SetService(service)

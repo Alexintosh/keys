@@ -29,6 +29,11 @@ func secretServiceList(svc *ss.SecretService, service string, key SecretKey, opt
 	if opts == nil {
 		opts = &ListOpts{}
 	}
+	decodeFn := opts.DecodeFn
+	if decodeFn == nil {
+		decodeFn = DecodeItem
+	}
+
 	paths, err := objectPaths(svc, service)
 	if err != nil {
 		return nil, err
@@ -50,7 +55,8 @@ func secretServiceList(svc *ss.SecretService, service string, key SecretKey, opt
 		if secret == nil {
 			continue
 		}
-		item, err := DecodeItem(secret.Value, key)
+
+		item, err := decodeFn(secret.Value, key)
 		if err != nil {
 			// return nil, err
 			continue

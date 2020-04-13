@@ -10,25 +10,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-// TODO: If linux dbus not available, automatically choose fs keyring?
-
-// NewFS creates a Keyring using the local filesystem. This is an alternate
-// Keyring implementation that is platform agnostic.
-func NewFS(service string, dir string) (Keyring, error) {
-	if service == "" {
-		return nil, errors.Errorf("no service specified")
-	}
-	fs, err := FS(dir)
-	if err != nil {
-		return nil, err
-	}
-	kr, err := NewKeyring(service, fs)
-	if err != nil {
-		return nil, err
-	}
-	return kr, nil
-}
-
 // FS returns keyring.Store backed by the filesystem.
 func FS(dir string) (Store, error) {
 	if dir == "" || dir == "/" {
@@ -79,7 +60,7 @@ func (k fs) Set(service string, id string, data []byte, typ string) error {
 	return nil
 }
 
-func (k fs) IDs(service string, prefix string, showHidden bool, showReserved bool) ([]string, error) {
+func (k fs) IDs(service string, prefix string, showHidden bool, showReserved bool, encoder ItemEncoder) ([]string, error) {
 	path := filepath.Join(k.dir, service)
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -108,11 +89,11 @@ func (k fs) IDs(service string, prefix string, showHidden bool, showReserved boo
 	return ids, nil
 }
 
-func (k fs) List(service string, key SecretKey, opts *ListOpts) ([]*Item, error) {
-	return listDefault(k, service, key, opts)
+func (k fs) List(service string, key SecretKey, opts *ListOpts, encoder ItemEncoder) ([]*Item, error) {
+	return listDefault(k, service, key, opts, encoder)
 }
 
-func (k fs) Reset(service string) error {
+func (k fs) Reset(service string, encoder ItemEncoder) error {
 	path := filepath.Join(k.dir, service)
 	if err := os.RemoveAll(path); err != nil {
 		return err

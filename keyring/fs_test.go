@@ -11,7 +11,10 @@ import (
 func testFS(t *testing.T) keyring.Keyring {
 	dir, err := ioutil.TempDir("", "KeysTest.keyring")
 	require.NoError(t, err)
-	kr, err := keyring.NewFS("KeysTest", dir)
+	fs, err := keyring.FS(dir)
+	require.NoError(t, err)
+	opts := &keyring.Opts{Store: fs}
+	kr, err := keyring.NewKeyring("KeysTest", opts)
 	require.NoError(t, err)
 	return kr
 }

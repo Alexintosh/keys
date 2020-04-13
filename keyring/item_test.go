@@ -8,16 +8,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestItem(t *testing.T) {
+func TestItemEncoder(t *testing.T) {
 	secretKey := randKey()
 	item := keyring.NewItem("account1", []byte("password"), "passphrase", time.Now())
-	b, err := item.Marshal(secretKey)
+
+	encoder := keyring.DefaultItemEncoder()
+	b, err := encoder.Encode(item, secretKey)
 	require.NoError(t, err)
 
-	_, err = item.Marshal(nil)
+	_, err = encoder.Encode(item, nil)
 	require.EqualError(t, err, "no secret key specified")
 
-	itemOut, err := keyring.DecodeItem(b, secretKey)
+	itemOut, err := encoder.Decode(b, secretKey)
 	require.NoError(t, err)
 
 	require.Equal(t, item.ID, itemOut.ID)
@@ -25,6 +27,6 @@ func TestItem(t *testing.T) {
 	require.Equal(t, item.Data, itemOut.Data)
 
 	secretKey2 := randKey()
-	_, err = keyring.DecodeItem(b, secretKey2)
+	_, err = encoder.Decode(b, secretKey2)
 	require.EqualError(t, err, "invalid keyring auth")
 }

@@ -10,7 +10,10 @@ import (
 // NewMem returns an in memory Keyring useful for testing or ephemeral keys.
 // The Keyring is unlocked (setup with a random key).
 func NewMem() Keyring {
-	kr, err := newKeyring(NewMemStore(), "")
+	opts := &Opts{
+		Store: NewMemStore(),
+	}
+	kr, err := newKeyring("", opts)
 	if err != nil {
 		panic(err)
 	}
@@ -45,15 +48,15 @@ func (k mem) Set(service string, id string, data []byte, typ string) error {
 	return nil
 }
 
-func (k mem) List(service string, key SecretKey, opts *ListOpts) ([]*Item, error) {
-	return listDefault(k, service, key, opts)
+func (k mem) List(service string, key SecretKey, opts *ListOpts, encoder ItemEncoder) ([]*Item, error) {
+	return listDefault(k, service, key, opts, encoder)
 }
 
-func (k mem) Reset(service string) error {
-	return resetDefault(k, service)
+func (k mem) Reset(service string, encoder ItemEncoder) error {
+	return resetDefault(k, service, encoder)
 }
 
-func (k mem) IDs(service string, prefix string, showHidden bool, showReserved bool) ([]string, error) {
+func (k mem) IDs(service string, prefix string, showHidden bool, showReserved bool, encoder ItemEncoder) ([]string, error) {
 	ids := make([]string, 0, len(k.items))
 	for id := range k.items {
 		if !showReserved && strings.HasPrefix(id, reservedPrefix) {
